@@ -424,9 +424,21 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       }
       
       console.log('💾 Setting analysis result state...');
-      setAnalysisResult(result);
+      // Force state update with a new object reference to ensure React detects the change
+      setAnalysisResult({
+        diagnosis: result.diagnosis,
+        confidence: result.confidence,
+        timestamp: result.timestamp,
+        heatmapImageUrl: result.heatmapImageUrl,
+        overlayImageUrl: result.overlayImageUrl
+      });
       setIsAnalyzing(false);
       console.log('✅ State updated, UI should refresh');
+      
+      // Force a small delay to ensure state propagation
+      setTimeout(() => {
+        console.log('🔄 Post-update check - analysisResult:', analysisResult);
+      }, 100);
       
     } catch (error: any) {
       console.error('❌ Analysis failed:', error);
@@ -535,16 +547,25 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       });
       
       // Update analysis result with Grad CAM images
-      const updatedResult = {
-        ...analysisResult,
-        heatmapImageUrl: gradcamData.heatmapImageUrl,
-        overlayImageUrl: gradcamData.overlayImageUrl
+      // Create a completely new object to ensure React detects the change
+      const updatedResult: AnalysisResult = {
+        diagnosis: analysisResult.diagnosis,
+        confidence: analysisResult.confidence,
+        timestamp: analysisResult.timestamp,
+        heatmapImageUrl: gradcamData.heatmapImageUrl || undefined,
+        overlayImageUrl: gradcamData.overlayImageUrl || undefined
       };
       
       console.log('💾 Updating analysis result with Grad CAM images...');
+      console.log('📸 Updated result:', updatedResult);
       setAnalysisResult(updatedResult);
       setIsGeneratingGradCAM(false);
       console.log('✅ Grad CAM state updated, UI should refresh');
+      
+      // Force a small delay to ensure state propagation
+      setTimeout(() => {
+        console.log('🔄 Post-update check - analysisResult:', analysisResult);
+      }, 100);
       
     } catch (error: any) {
       console.error('❌ Grad CAM generation failed:', error);
@@ -852,7 +873,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
           {/* Grad CAM Visualization Results */}
           {analysisResult && analysisResult.overlayImageUrl && (
-            <Card>
+            <Card key={`gradcam-${analysisResult.timestamp}`}>
               <CardHeader>
                 <CardTitle className="flex items-center space-x-2">
                   <Eye className="w-5 h-5" />
