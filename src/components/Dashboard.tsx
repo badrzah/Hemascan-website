@@ -362,38 +362,60 @@ export default function Dashboard({ onLogout }: DashboardProps) {
    * };
    */
   const handleAnalyze = async () => {
+    console.log('🔍 Analyze button clicked!');
+    console.log('📁 Image file state:', imageFile);
+    console.log('🖼️ Uploaded image state:', uploadedImage);
+    
     if (!imageFile) {
+      console.error('❌ No imageFile found!');
       alert('Please upload an image first');
       return;
     }
 
+    console.log('🔍 Starting analysis...');
+    console.log('📁 Image file:', imageFile.name, imageFile.size, 'bytes');
+    console.log('🌐 API URL:', API_ENDPOINTS.ANALYSIS.ANALYZE);
+    
     setIsAnalyzing(true);
     
     try {
       const formData = new FormData();
       formData.append('file', imageFile);  // Must match backend parameter name
       
+      console.log('📤 Sending request to:', API_ENDPOINTS.ANALYSIS.ANALYZE);
+      
       // Call backend API (configurable via environment variable)
       const response = await fetch(API_ENDPOINTS.ANALYSIS.ANALYZE, {
         method: 'POST',
         body: formData,
+        // Don't set Content-Type header - browser will set it with boundary for FormData
         headers: {
           'Authorization': 'Bearer mock_token'
         }
       });
 
+      console.log('📥 Response status:', response.status, response.statusText);
+      
       if (!response.ok) {
-        throw new Error('Analysis failed');
+        const errorText = await response.text();
+        console.error('❌ Response error:', errorText);
+        throw new Error(`Analysis failed: ${response.status} ${response.statusText}`);
       }
 
       const result: AnalysisResult = await response.json();
+      console.log('✅ Analysis result:', result);
       setAnalysisResult(result);
       setIsAnalyzing(false);
       
     } catch (error: any) {
-      console.error('Analysis failed:', error);
+      console.error('❌ Analysis failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       setIsAnalyzing(false);
-      alert('Analysis failed: ' + error.message);
+      alert('Analysis failed: ' + (error.message || 'Unknown error. Check console for details.'));
     }
   };
 
