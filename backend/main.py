@@ -307,6 +307,14 @@ async def analyze(file: UploadFile = File(...)):
         if not file:
             return {"error": "No file provided"}
         
+        # Check if model is loaded
+        if model is None:
+            print("❌ Model not loaded - cannot perform analysis")
+            return {
+                "error": "Model not available. Please check Lambda logs for model loading errors.",
+                "details": "The PyTorch model failed to load during Lambda initialization"
+            }
+        
         print(f"📸 Processing image: {file.filename}")
         print(f"   File type: {file.content_type}")
         
@@ -317,7 +325,11 @@ async def analyze(file: UploadFile = File(...)):
         # Preprocess
         image_tensor = preprocess_image(image_data)
         if image_tensor is None:
-            return {"error": "Failed to preprocess image"}
+            print("❌ Preprocessing returned None - check logs above for details")
+            return {
+                "error": "Failed to preprocess image. Please ensure the image is a valid JPEG, PNG, or TIFF file.",
+                "details": "Check Lambda logs for specific preprocessing error"
+            }
         
         # Run inference
         with torch.no_grad():
