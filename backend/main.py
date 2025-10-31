@@ -82,30 +82,51 @@ except Exception as e:
 def preprocess_image(image_bytes):
     """Convert uploaded image to model input tensor"""
     try:
+        if not image_bytes or len(image_bytes) == 0:
+            print("❌ Preprocessing error: Empty image data")
+            return None
+        
+        print(f"📸 Preprocessing image: {len(image_bytes)} bytes")
+        
         # Load image
-        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        try:
+            img = Image.open(io.BytesIO(image_bytes))
+            print(f"   Image format: {img.format}, Mode: {img.mode}, Size: {img.size}")
+        except Exception as e:
+            print(f"❌ Error opening image: {e}")
+            return None
+        
+        # Convert to RGB if needed
+        if img.mode != 'RGB':
+            print(f"   Converting from {img.mode} to RGB")
+            img = img.convert("RGB")
+        
+        # Resize
         img = img.resize((IMG_SIZE, IMG_SIZE))
+        print(f"   Resized to: {IMG_SIZE}x{IMG_SIZE}")
         
         # Convert to numpy array
         img_array = np.array(img).astype(np.float32) / 255.0
+        print(f"   Array shape: {img_array.shape}, Range: [{img_array.min():.3f}, {img_array.max():.3f}]")
         
         # Normalize using ImageNet statistics
         img_array = (img_array - np.array(MEAN)) / np.array(STD)
+        print(f"   Normalized range: [{img_array.min():.3f}, {img_array.max():.3f}]")
         
         # Convert to tensor (NCHW format) with float32 dtype
         img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0).float()
+        print(f"✅ Preprocessing successful: tensor shape {img_tensor.shape}, dtype {img_tensor.dtype}")
         
         return img_tensor
     except Exception as e:
         print(f"❌ Preprocessing error: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 def save_report(diagnosis, confidence):
-    """Save analysis report to file"""
+    """Save analysis report to file (or return in-memory for Lambda)"""
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
-    
-    # Create folder
-    Path("results/analysis").mkdir(parents=True, exist_ok=True)
     
     # Create report
     report = {
@@ -114,12 +135,19 @@ def save_report(diagnosis, confidence):
         "timestamp": timestamp
     }
     
-    # Save as JSON
-    filepath = f"results/analysis/report_{timestamp}.json"
-    with open(filepath, "w") as f:
-        json.dump(report, f, indent=2)
+    # For Lambda: don't save to disk, just return report
+    # For EB/local: save to file
+    if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        # Running on Lambda - don't save files
+        print(f"✅ Report generated: {timestamp}")
+    else:
+        # Running on EB/local - save to file
+        Path("results/analysis").mkdir(parents=True, exist_ok=True)
+        filepath = f"results/analysis/report_{timestamp}.json"
+        with open(filepath, "w") as f:
+            json.dump(report, f, indent=2)
+        print(f"✅ Report saved: {filepath}")
     
-    print(f"✅ Report saved: {filepath}")
     return report
 
 def denorm(batch):
@@ -171,29 +199,33 @@ def save_gradcam_overlay(timestamp, overlay_image):
     try:
         import cv2
         
-        Path("results/overlays").mkdir(parents=True, exist_ok=True)
-        
         # Convert overlay from RGB to BGR for cv2 (overlay_image is already in [0,1] range)
         overlay_bgr = cv2.cvtColor((overlay_image * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
         
-        # Save overlay image
-        overlay_path = f"results/overlays/overlay_{timestamp}.png"
-        cv2.imwrite(overlay_path, overlay_bgr)
+        # For Lambda: encode directly to base64 without saving
+        # For EB/local: save to file then encode
+        if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+            # Lambda: encode directly from memory
+            _, buffer = cv2.imencode('.png', overlay_bgr)
+            overlay_base64 = base64.b64encode(buffer).decode('utf-8')
+            overlay_url = f"data:image/png;base64,{overlay_base64}"
+            print(f"✅ Grad CAM overlay encoded")
+        else:
+            # EB/local: save to file then encode
+            Path("results/overlays").mkdir(parents=True, exist_ok=True)
+            overlay_path = f"results/overlays/overlay_{timestamp}.png"
+            cv2.imwrite(overlay_path, overlay_bgr)
+            with open(overlay_path, 'rb') as f:
+                overlay_base64 = base64.b64encode(f.read()).decode('utf-8')
+            overlay_url = f"data:image/png;base64,{overlay_base64}"
+            print(f"✅ Grad CAM overlay saved: {overlay_path}")
         
-        # Convert to base64 for frontend display
-        with open(overlay_path, 'rb') as f:
-            overlay_base64 = base64.b64encode(f.read()).decode('utf-8')
-        
-        # Return as data URL
-        overlay_url = f"data:image/png;base64,{overlay_base64}"
-        
-        print(f"✅ Grad CAM overlay saved: {overlay_path}")
         return overlay_url
     except Exception as e:
         print(f"❌ Error saving Grad CAM: {e}")
         import traceback
         traceback.print_exc()
-        return None, None
+        return None
 
 # ==================== ENDPOINTS ====================
 
