@@ -407,31 +407,55 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         throw new Error(`Analysis failed: ${response.status} ${response.statusText}`);
       }
 
-      const result: AnalysisResult = await response.json();
-      console.log('✅ Analysis result:', result);
+      const result: any = await response.json();
+      console.log('✅ Analysis result (raw):', result);
       console.log('📋 Result details:', {
         diagnosis: result.diagnosis,
         confidence: result.confidence,
         timestamp: result.timestamp,
         hasHeatmap: !!result.heatmapImageUrl,
-        hasOverlay: !!result.overlayImageUrl
+        hasOverlay: !!result.overlayImageUrl,
+        resultType: typeof result,
+        resultKeys: Object.keys(result || {})
       });
       
-      // Verify result structure
-      if (!result.diagnosis || result.confidence === undefined) {
-        console.error('❌ Invalid result structure:', result);
-        throw new Error('Invalid response format from backend');
+      // Verify result structure - more lenient validation
+      if (!result) {
+        console.error('❌ Result is null or undefined');
+        throw new Error('Empty response from backend');
       }
+      
+      if (result.error) {
+        console.error('❌ Backend returned error:', result.error);
+        throw new Error(`Backend error: ${result.error}`);
+      }
+      
+      // Check if required fields exist (with fallbacks)
+      const diagnosis = result.diagnosis || result.Diagnosis || 'Unknown';
+      const confidence = result.confidence !== undefined && result.confidence !== null 
+        ? Number(result.confidence) 
+        : (result.Confidence !== undefined ? Number(result.Confidence) : 0);
+      const timestamp = result.timestamp || result.Timestamp || new Date().toISOString();
+      
+      if (!diagnosis || diagnosis === 'Unknown') {
+        console.error('❌ Invalid diagnosis field:', result);
+        throw new Error('Backend response missing diagnosis field');
+      }
+      
+      // Create properly formatted result
+      const formattedResult: AnalysisResult = {
+        diagnosis: String(diagnosis),
+        confidence: Number(confidence),
+        timestamp: String(timestamp),
+        heatmapImageUrl: result.heatmapImageUrl || result.heatmap_image_url,
+        overlayImageUrl: result.overlayImageUrl || result.overlay_image_url
+      };
+      
+      console.log('✅ Formatted result:', formattedResult);
       
       console.log('💾 Setting analysis result state...');
       // Force state update with a new object reference to ensure React detects the change
-      setAnalysisResult({
-        diagnosis: result.diagnosis,
-        confidence: result.confidence,
-        timestamp: result.timestamp,
-        heatmapImageUrl: result.heatmapImageUrl,
-        overlayImageUrl: result.overlayImageUrl
-      });
+      setAnalysisResult(formattedResult);
       setIsAnalyzing(false);
       console.log('✅ State updated, UI should refresh');
       
