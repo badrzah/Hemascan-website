@@ -1,0 +1,54 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Build outputs
+build/
+dist/
+*.egg-info/
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.development
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# AWS
+.elasticbeanstalk/
+.ebextensions/*.bak
+
+# Results (large files)
+backend/results/
+*.pt
+*.pth
+
+# Model files (exclude from git, but include in deployment)
+# backend/models/*.pt
+
+# Temporary files
+*.tmp
+*.temp
+
