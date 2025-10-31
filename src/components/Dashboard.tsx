@@ -61,6 +61,11 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   
   // Analysis state
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
+  
+  // Debug: Track analysisResult changes
+  useEffect(() => {
+    console.log('🔄 analysisResult state changed:', analysisResult);
+  }, [analysisResult]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Grad CAM state
@@ -404,8 +409,24 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
       const result: AnalysisResult = await response.json();
       console.log('✅ Analysis result:', result);
+      console.log('📋 Result details:', {
+        diagnosis: result.diagnosis,
+        confidence: result.confidence,
+        timestamp: result.timestamp,
+        hasHeatmap: !!result.heatmapImageUrl,
+        hasOverlay: !!result.overlayImageUrl
+      });
+      
+      // Verify result structure
+      if (!result.diagnosis || result.confidence === undefined) {
+        console.error('❌ Invalid result structure:', result);
+        throw new Error('Invalid response format from backend');
+      }
+      
+      console.log('💾 Setting analysis result state...');
       setAnalysisResult(result);
       setIsAnalyzing(false);
+      console.log('✅ State updated, UI should refresh');
       
     } catch (error: any) {
       console.error('❌ Analysis failed:', error);
