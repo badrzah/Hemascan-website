@@ -17,7 +17,6 @@ import {
   User,
   RotateCcw
 } from 'lucide-react';
-import { API_ENDPOINTS, VITAL_SIGNS_API } from '../config/api';
 
 interface DashboardProps {
   onLogout: () => void;
@@ -61,11 +60,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
   
   // Analysis state
   const [analysisResult, setAnalysisResult] = useState<AnalysisResult | null>(null);
-  
-  // Debug: Track analysisResult changes
-  useEffect(() => {
-    console.log('🔄 analysisResult state changed:', analysisResult);
-  }, [analysisResult]);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // Grad CAM state
@@ -128,8 +122,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
     const fetchVitalSigns = async () => {
       try {
-        // Fetch real data from AWS API Gateway
-        const response = await fetch(VITAL_SIGNS_API, {
+        // Fetch real data from your AWS API Gateway
+        const response = await fetch('https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals', {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -185,7 +179,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     // Smart check function - checks if sensor is active and restarts polling
     const checkForSensorActivity = async () => {
       try {
-        const response = await fetch(VITAL_SIGNS_API, {
+        const response = await fetch('https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals', {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -367,112 +361,38 @@ export default function Dashboard({ onLogout }: DashboardProps) {
    * };
    */
   const handleAnalyze = async () => {
-    console.log('🔍 Analyze button clicked!');
-    console.log('📁 Image file state:', imageFile);
-    console.log('🖼️ Uploaded image state:', uploadedImage);
-    
     if (!imageFile) {
-      console.error('❌ No imageFile found!');
       alert('Please upload an image first');
       return;
     }
 
-    console.log('🔍 Starting analysis...');
-    console.log('📁 Image file:', imageFile.name, imageFile.size, 'bytes');
-    console.log('🌐 API URL:', API_ENDPOINTS.ANALYSIS.ANALYZE);
-    
     setIsAnalyzing(true);
     
     try {
       const formData = new FormData();
       formData.append('file', imageFile);  // Must match backend parameter name
       
-      console.log('📤 Sending request to:', API_ENDPOINTS.ANALYSIS.ANALYZE);
-      
-      // Call backend API (configurable via environment variable)
-      const response = await fetch(API_ENDPOINTS.ANALYSIS.ANALYZE, {
+      // Call REAL backend at localhost:8000
+      const response = await fetch('http://localhost:8000/api/analyze', {
         method: 'POST',
         body: formData,
-        // Don't set Content-Type header - browser will set it with boundary for FormData
         headers: {
           'Authorization': 'Bearer mock_token'
         }
       });
 
-      console.log('📥 Response status:', response.status, response.statusText);
-      
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Response error:', errorText);
-        throw new Error(`Analysis failed: ${response.status} ${response.statusText}`);
+        throw new Error('Analysis failed');
       }
 
-      const result: any = await response.json();
-      console.log('✅ Analysis result (raw):', result);
-      console.log('📋 Result details:', {
-        diagnosis: result.diagnosis,
-        confidence: result.confidence,
-        timestamp: result.timestamp,
-        hasHeatmap: !!result.heatmapImageUrl,
-        hasOverlay: !!result.overlayImageUrl,
-        resultType: typeof result,
-        resultKeys: Object.keys(result || {})
-      });
-      
-      // Verify result structure - more lenient validation
-      if (!result) {
-        console.error('❌ Result is null or undefined');
-        throw new Error('Empty response from backend');
-      }
-      
-      if (result.error) {
-        console.error('❌ Backend returned error:', result.error);
-        throw new Error(`Backend error: ${result.error}`);
-      }
-      
-      // Check if required fields exist (with fallbacks)
-      const diagnosis = result.diagnosis || result.Diagnosis || 'Unknown';
-      const confidence = result.confidence !== undefined && result.confidence !== null 
-        ? Number(result.confidence) 
-        : (result.Confidence !== undefined ? Number(result.Confidence) : 0);
-      const timestamp = result.timestamp || result.Timestamp || new Date().toISOString();
-      
-      if (!diagnosis || diagnosis === 'Unknown') {
-        console.error('❌ Invalid diagnosis field:', result);
-        throw new Error('Backend response missing diagnosis field');
-      }
-      
-      // Create properly formatted result
-      const formattedResult: AnalysisResult = {
-        diagnosis: String(diagnosis),
-        confidence: Number(confidence),
-        timestamp: String(timestamp),
-        heatmapImageUrl: result.heatmapImageUrl || result.heatmap_image_url,
-        overlayImageUrl: result.overlayImageUrl || result.overlay_image_url
-      };
-      
-      console.log('✅ Formatted result:', formattedResult);
-      
-      console.log('💾 Setting analysis result state...');
-      // Force state update with a new object reference to ensure React detects the change
-      setAnalysisResult(formattedResult);
+      const result: AnalysisResult = await response.json();
+      setAnalysisResult(result);
       setIsAnalyzing(false);
-      console.log('✅ State updated, UI should refresh');
-      
-      // Force a small delay to ensure state propagation
-      setTimeout(() => {
-        console.log('🔄 Post-update check - analysisResult:', analysisResult);
-      }, 100);
       
     } catch (error: any) {
-      console.error('❌ Analysis failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack,
-        name: error.name
-      });
+      console.error('Analysis failed:', error);
       setIsAnalyzing(false);
-      alert('Analysis failed: ' + (error.message || 'Unknown error. Check console for details.'));
+      alert('Analysis failed: ' + error.message);
     }
   };
 
@@ -518,35 +438,19 @@ export default function Dashboard({ onLogout }: DashboardProps) {
    * };
    */
   const handleGradCAM = async () => {
-    console.log('🎯 Grad CAM button clicked!');
-    console.log('📁 Image file:', imageFile);
-    console.log('📊 Analysis result:', analysisResult);
-    
-    if (!imageFile) {
-      console.error('❌ No imageFile found!');
-      alert('Please upload an image first');
-      return;
-    }
-    
-    if (!analysisResult) {
-      console.error('❌ No analysisResult found! Please analyze first.');
+    if (!imageFile || !analysisResult) {
       alert('Please analyze an image first before generating Grad CAM visualization');
       return;
     }
 
-    console.log('🎯 Starting Grad CAM generation...');
-    console.log('🌐 API URL:', API_ENDPOINTS.ANALYSIS.GRAD_CAM);
-    
     setIsGeneratingGradCAM(true);
     
     try {
       const formData = new FormData();
       formData.append('file', imageFile);
       
-      console.log('📤 Sending Grad CAM request to:', API_ENDPOINTS.ANALYSIS.GRAD_CAM);
-      
-      // Call Grad CAM endpoint (configurable via environment variable)
-      const response = await fetch(API_ENDPOINTS.ANALYSIS.GRAD_CAM, {
+      // Call Grad CAM endpoint
+      const response = await fetch('http://localhost:8000/api/generate-gradcam', {
         method: 'POST',
         body: formData,
         headers: {
@@ -554,52 +458,25 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         }
       });
 
-      console.log('📥 Grad CAM response status:', response.status, response.statusText);
-
       if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ Grad CAM response error:', errorText);
-        throw new Error(`Grad CAM generation failed: ${response.status} ${response.statusText}`);
+        throw new Error('Grad CAM generation failed');
       }
 
       const gradcamData = await response.json();
-      console.log('✅ Grad CAM result:', gradcamData);
-      console.log('📋 Grad CAM details:', {
-        hasHeatmap: !!gradcamData.heatmapImageUrl,
-        hasOverlay: !!gradcamData.overlayImageUrl,
-        timestamp: gradcamData.timestamp
-      });
       
       // Update analysis result with Grad CAM images
-      // Create a completely new object to ensure React detects the change
-      const updatedResult: AnalysisResult = {
-        diagnosis: analysisResult.diagnosis,
-        confidence: analysisResult.confidence,
-        timestamp: analysisResult.timestamp,
-        heatmapImageUrl: gradcamData.heatmapImageUrl || undefined,
-        overlayImageUrl: gradcamData.overlayImageUrl || undefined
-      };
+      setAnalysisResult({
+        ...analysisResult,
+        heatmapImageUrl: gradcamData.heatmapImageUrl,
+        overlayImageUrl: gradcamData.overlayImageUrl
+      });
       
-      console.log('💾 Updating analysis result with Grad CAM images...');
-      console.log('📸 Updated result:', updatedResult);
-      setAnalysisResult(updatedResult);
       setIsGeneratingGradCAM(false);
-      console.log('✅ Grad CAM state updated, UI should refresh');
-      
-      // Force a small delay to ensure state propagation
-      setTimeout(() => {
-        console.log('🔄 Post-update check - analysisResult:', analysisResult);
-      }, 100);
       
     } catch (error: any) {
-      console.error('❌ Grad CAM generation failed:', error);
-      console.error('Error details:', {
-        message: error.message,
-        stack: error.stack,
-        name: error.name
-      });
+      console.error('Grad CAM generation failed:', error);
       setIsGeneratingGradCAM(false);
-      alert('Grad CAM visualization failed: ' + (error.message || 'Unknown error. Check console for details.'));
+      alert('Grad CAM visualization failed: ' + error.message);
     }
   };
 
@@ -737,8 +614,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setIsChatLoading(true);
 
     try {
-      // Call backend chat API (configurable via environment variable)
-      const response = await fetch(API_ENDPOINTS.CHAT, {
+      // Call REAL backend chat API
+      const response = await fetch('http://localhost:8000/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -871,8 +748,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </Card>
 
           {/* Analysis Results */}
-          {analysisResult && analysisResult.diagnosis && (
-            <Card key={`analysis-${analysisResult.timestamp}`}>
+          {analysisResult && (
+            <Card>
               <CardHeader>
                 <CardTitle>Analysis Results</CardTitle>
               </CardHeader>
@@ -887,7 +764,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
                   <div className="bg-slate-50 p-4 rounded-lg text-center">
                     <p className="text-sm text-slate-600 mb-1">Confidence Level</p>
                     <p className="text-2xl font-semibold text-slate-900">
-                      {typeof analysisResult.confidence === 'number' ? `${analysisResult.confidence}%` : 'N/A'}
+                      {analysisResult.confidence}%
                     </p>
                   </div>
                 </div>
@@ -897,7 +774,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
 
           {/* Grad CAM Visualization Results */}
           {analysisResult && analysisResult.overlayImageUrl && (
-            <Card key={`gradcam-${analysisResult.timestamp}`}>
+            <Card>
               <CardHeader>
                 <CardTitle className="flex items-center space-x-2">
                   <Eye className="w-5 h-5" />

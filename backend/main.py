@@ -25,15 +25,10 @@ import base64
 # ==================== SETUP ====================
 app = FastAPI(title="HemaScan Backend", version="0.1.0")
 
-# CORS Configuration - Support both local development and production
-import os
-cors_origins = os.getenv("CORS_ORIGIN", "http://localhost:5173,http://localhost:3000").split(",")
-# Clean up any whitespace
-cors_origins = [origin.strip() for origin in cors_origins]
-
+# Allow frontend on localhost:5173 to call this backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
+    allow_origins=["http://localhost:5173", "http://localhost:3000"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -45,33 +40,11 @@ class ChatRequest(BaseModel):
     vital_signs: dict = None
 
 # ==================== LOAD MODEL ====================
-# Load config first (needed for preprocessing even if model fails)
-print("🔄 Loading configuration...")
+print("🔄 Loading PyTorch model...")
 try:
     with open("models/config.json", "r") as f:
         config = json.load(f)
     
-    IMG_SIZE = config["img_size"]
-    MEAN = config["mean"]
-    STD = config["std"]
-    CLASSES = config["classes"]
-    
-    print(f"✅ Configuration loaded!")
-    print(f"   - Classes: {CLASSES}")
-    print(f"   - Image size: {IMG_SIZE}x{IMG_SIZE}")
-except Exception as e:
-    print(f"❌ Error loading config: {e}")
-    # Fallback defaults
-    IMG_SIZE = 224
-    MEAN = [0.485, 0.456, 0.406]
-    STD = [0.229, 0.224, 0.225]
-    CLASSES = ["leukemia", "normal"]
-    print(f"⚠️ Using default values")
-
-# Load model
-print("🔄 Loading PyTorch model...")
-model = None
-try:
     # Create model architecture (ResNet18)
     model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
     
@@ -87,64 +60,47 @@ try:
     model = model.float()
     model.eval()
     
+    IMG_SIZE = config["img_size"]
+    MEAN = config["mean"]
+    STD = config["std"]
+    CLASSES = config["classes"]
+    
     print(f"✅ Model loaded successfully!")
+    print(f"   - Classes: {CLASSES}")
+    print(f"   - Image size: {IMG_SIZE}x{IMG_SIZE}")
     
 except Exception as e:
     print(f"❌ Error loading model: {e}")
-    import traceback
-    traceback.print_exc()
-    model = None
 
 # ==================== UTILITIES ====================
 
 def preprocess_image(image_bytes):
     """Convert uploaded image to model input tensor"""
     try:
-        if not image_bytes or len(image_bytes) == 0:
-            print("❌ Preprocessing error: Empty image data")
-            return None
-        
-        print(f"📸 Preprocessing image: {len(image_bytes)} bytes")
-        
         # Load image
-        try:
-            img = Image.open(io.BytesIO(image_bytes))
-            print(f"   Image format: {img.format}, Mode: {img.mode}, Size: {img.size}")
-        except Exception as e:
-            print(f"❌ Error opening image: {e}")
-            return None
-        
-        # Convert to RGB if needed
-        if img.mode != 'RGB':
-            print(f"   Converting from {img.mode} to RGB")
-            img = img.convert("RGB")
-        
-        # Resize
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         img = img.resize((IMG_SIZE, IMG_SIZE))
-        print(f"   Resized to: {IMG_SIZE}x{IMG_SIZE}")
         
         # Convert to numpy array
         img_array = np.array(img).astype(np.float32) / 255.0
-        print(f"   Array shape: {img_array.shape}, Range: [{img_array.min():.3f}, {img_array.max():.3f}]")
         
         # Normalize using ImageNet statistics
         img_array = (img_array - np.array(MEAN)) / np.array(STD)
-        print(f"   Normalized range: [{img_array.min():.3f}, {img_array.max():.3f}]")
         
         # Convert to tensor (NCHW format) with float32 dtype
         img_tensor = torch.from_numpy(img_array).permute(2, 0, 1).unsqueeze(0).float()
-        print(f"✅ Preprocessing successful: tensor shape {img_tensor.shape}, dtype {img_tensor.dtype}")
         
         return img_tensor
     except Exception as e:
         print(f"❌ Preprocessing error: {e}")
-        import traceback
-        traceback.print_exc()
         return None
 
 def save_report(diagnosis, confidence):
-    """Save analysis report to file (or return in-memory for Lambda)"""
+    """Save analysis report to file"""
     timestamp = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    
+    # Create folder
+    Path("results/analysis").mkdir(parents=True, exist_ok=True)
     
     # Create report
     report = {
@@ -153,19 +109,12 @@ def save_report(diagnosis, confidence):
         "timestamp": timestamp
     }
     
-    # For Lambda: don't save to disk, just return report
-    # For EB/local: save to file
-    if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
-        # Running on Lambda - don't save files
-        print(f"✅ Report generated: {timestamp}")
-    else:
-        # Running on EB/local - save to file
-        Path("results/analysis").mkdir(parents=True, exist_ok=True)
-        filepath = f"results/analysis/report_{timestamp}.json"
-        with open(filepath, "w") as f:
-            json.dump(report, f, indent=2)
-        print(f"✅ Report saved: {filepath}")
+    # Save as JSON
+    filepath = f"results/analysis/report_{timestamp}.json"
+    with open(filepath, "w") as f:
+        json.dump(report, f, indent=2)
     
+    print(f"✅ Report saved: {filepath}")
     return report
 
 def denorm(batch):
@@ -217,33 +166,29 @@ def save_gradcam_overlay(timestamp, overlay_image):
     try:
         import cv2
         
+        Path("results/overlays").mkdir(parents=True, exist_ok=True)
+        
         # Convert overlay from RGB to BGR for cv2 (overlay_image is already in [0,1] range)
         overlay_bgr = cv2.cvtColor((overlay_image * 255).astype(np.uint8), cv2.COLOR_RGB2BGR)
         
-        # For Lambda: encode directly to base64 without saving
-        # For EB/local: save to file then encode
-        if os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
-            # Lambda: encode directly from memory
-            _, buffer = cv2.imencode('.png', overlay_bgr)
-            overlay_base64 = base64.b64encode(buffer).decode('utf-8')
-            overlay_url = f"data:image/png;base64,{overlay_base64}"
-            print(f"✅ Grad CAM overlay encoded")
-        else:
-            # EB/local: save to file then encode
-            Path("results/overlays").mkdir(parents=True, exist_ok=True)
-            overlay_path = f"results/overlays/overlay_{timestamp}.png"
-            cv2.imwrite(overlay_path, overlay_bgr)
-            with open(overlay_path, 'rb') as f:
-                overlay_base64 = base64.b64encode(f.read()).decode('utf-8')
-            overlay_url = f"data:image/png;base64,{overlay_base64}"
-            print(f"✅ Grad CAM overlay saved: {overlay_path}")
+        # Save overlay image
+        overlay_path = f"results/overlays/overlay_{timestamp}.png"
+        cv2.imwrite(overlay_path, overlay_bgr)
         
+        # Convert to base64 for frontend display
+        with open(overlay_path, 'rb') as f:
+            overlay_base64 = base64.b64encode(f.read()).decode('utf-8')
+        
+        # Return as data URL
+        overlay_url = f"data:image/png;base64,{overlay_base64}"
+        
+        print(f"✅ Grad CAM overlay saved: {overlay_path}")
         return overlay_url
     except Exception as e:
         print(f"❌ Error saving Grad CAM: {e}")
         import traceback
         traceback.print_exc()
-        return None
+        return None, None
 
 # ==================== ENDPOINTS ====================
 
@@ -307,14 +252,6 @@ async def analyze(file: UploadFile = File(...)):
         if not file:
             return {"error": "No file provided"}
         
-        # Check if model is loaded
-        if model is None:
-            print("❌ Model not loaded - cannot perform analysis")
-            return {
-                "error": "Model not available. Please check Lambda logs for model loading errors.",
-                "details": "The PyTorch model failed to load during Lambda initialization"
-            }
-        
         print(f"📸 Processing image: {file.filename}")
         print(f"   File type: {file.content_type}")
         
@@ -325,11 +262,7 @@ async def analyze(file: UploadFile = File(...)):
         # Preprocess
         image_tensor = preprocess_image(image_data)
         if image_tensor is None:
-            print("❌ Preprocessing returned None - check logs above for details")
-            return {
-                "error": "Failed to preprocess image. Please ensure the image is a valid JPEG, PNG, or TIFF file.",
-                "details": "Check Lambda logs for specific preprocessing error"
-            }
+            return {"error": "Failed to preprocess image"}
         
         # Run inference
         with torch.no_grad():
@@ -375,14 +308,6 @@ async def generate_gradcam_endpoint(file: UploadFile = File(...)):
     Call this AFTER analyze to get heatmap + overlay
     """
     try:
-        # Check if model is loaded
-        if model is None:
-            print("❌ Model not loaded - cannot generate Grad CAM")
-            return {
-                "error": "Model not available. Please check Lambda logs for model loading errors.",
-                "details": "The PyTorch model failed to load during Lambda initialization"
-            }
-        
         print(f"🎯 Generating Grad CAM for: {file.filename}")
         
         # Read uploaded image
@@ -391,11 +316,7 @@ async def generate_gradcam_endpoint(file: UploadFile = File(...)):
         # Preprocess
         image_tensor = preprocess_image(image_data)
         if image_tensor is None:
-            print("❌ Preprocessing returned None - check logs above for details")
-            return {
-                "error": "Failed to preprocess image. Please ensure the image is a valid JPEG, PNG, or TIFF file.",
-                "details": "Check Lambda logs for specific preprocessing error"
-            }
+            return {"error": "Failed to preprocess image"}
         
         # Get prediction
         with torch.no_grad():
