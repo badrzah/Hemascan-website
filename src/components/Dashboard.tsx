@@ -482,16 +482,32 @@ export default function Dashboard({ onLogout }: DashboardProps) {
    * };
    */
   const handleGradCAM = async () => {
-    if (!imageFile || !analysisResult) {
+    console.log('🎯 Grad CAM button clicked!');
+    console.log('📁 Image file:', imageFile);
+    console.log('📊 Analysis result:', analysisResult);
+    
+    if (!imageFile) {
+      console.error('❌ No imageFile found!');
+      alert('Please upload an image first');
+      return;
+    }
+    
+    if (!analysisResult) {
+      console.error('❌ No analysisResult found! Please analyze first.');
       alert('Please analyze an image first before generating Grad CAM visualization');
       return;
     }
 
+    console.log('🎯 Starting Grad CAM generation...');
+    console.log('🌐 API URL:', API_ENDPOINTS.ANALYSIS.GRAD_CAM);
+    
     setIsGeneratingGradCAM(true);
     
     try {
       const formData = new FormData();
       formData.append('file', imageFile);
+      
+      console.log('📤 Sending Grad CAM request to:', API_ENDPOINTS.ANALYSIS.GRAD_CAM);
       
       // Call Grad CAM endpoint (configurable via environment variable)
       const response = await fetch(API_ENDPOINTS.ANALYSIS.GRAD_CAM, {
@@ -502,25 +518,43 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         }
       });
 
+      console.log('📥 Grad CAM response status:', response.status, response.statusText);
+
       if (!response.ok) {
-        throw new Error('Grad CAM generation failed');
+        const errorText = await response.text();
+        console.error('❌ Grad CAM response error:', errorText);
+        throw new Error(`Grad CAM generation failed: ${response.status} ${response.statusText}`);
       }
 
       const gradcamData = await response.json();
+      console.log('✅ Grad CAM result:', gradcamData);
+      console.log('📋 Grad CAM details:', {
+        hasHeatmap: !!gradcamData.heatmapImageUrl,
+        hasOverlay: !!gradcamData.overlayImageUrl,
+        timestamp: gradcamData.timestamp
+      });
       
       // Update analysis result with Grad CAM images
-      setAnalysisResult({
+      const updatedResult = {
         ...analysisResult,
         heatmapImageUrl: gradcamData.heatmapImageUrl,
         overlayImageUrl: gradcamData.overlayImageUrl
-      });
+      };
       
+      console.log('💾 Updating analysis result with Grad CAM images...');
+      setAnalysisResult(updatedResult);
       setIsGeneratingGradCAM(false);
+      console.log('✅ Grad CAM state updated, UI should refresh');
       
     } catch (error: any) {
-      console.error('Grad CAM generation failed:', error);
+      console.error('❌ Grad CAM generation failed:', error);
+      console.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
       setIsGeneratingGradCAM(false);
-      alert('Grad CAM visualization failed: ' + error.message);
+      alert('Grad CAM visualization failed: ' + (error.message || 'Unknown error. Check console for details.'));
     }
   };
 
