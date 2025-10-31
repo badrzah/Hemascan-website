@@ -847,8 +847,8 @@ export default function Dashboard({ onLogout }: DashboardProps) {
           </Card>
 
           {/* Analysis Results */}
-          {analysisResult && (
-            <Card>
+          {analysisResult && analysisResult.diagnosis && (
+            <Card key={`analysis-${analysisResult.timestamp}`}>
               <CardHeader>
                 <CardTitle>Analysis Results</CardTitle>
               </CardHeader>
@@ -863,7 +863,7 @@ export default function Dashboard({ onLogout }: DashboardProps) {
                   <div className="bg-slate-50 p-4 rounded-lg text-center">
                     <p className="text-sm text-slate-600 mb-1">Confidence Level</p>
                     <p className="text-2xl font-semibold text-slate-900">
-                      {analysisResult.confidence}%
+                      {typeof analysisResult.confidence === 'number' ? `${analysisResult.confidence}%` : 'N/A'}
                     </p>
                   </div>
                 </div>
