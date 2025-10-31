@@ -353,7 +353,11 @@ async def generate_gradcam_endpoint(file: UploadFile = File(...)):
         # Preprocess
         image_tensor = preprocess_image(image_data)
         if image_tensor is None:
-            return {"error": "Failed to preprocess image"}
+            print("❌ Preprocessing returned None - check logs above for details")
+            return {
+                "error": "Failed to preprocess image. Please ensure the image is a valid JPEG, PNG, or TIFF file.",
+                "details": "Check Lambda logs for specific preprocessing error"
+            }
         
         # Get prediction
         with torch.no_grad():
