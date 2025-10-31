@@ -45,11 +45,33 @@ class ChatRequest(BaseModel):
     vital_signs: dict = None
 
 # ==================== LOAD MODEL ====================
-print("🔄 Loading PyTorch model...")
+# Load config first (needed for preprocessing even if model fails)
+print("🔄 Loading configuration...")
 try:
     with open("models/config.json", "r") as f:
         config = json.load(f)
     
+    IMG_SIZE = config["img_size"]
+    MEAN = config["mean"]
+    STD = config["std"]
+    CLASSES = config["classes"]
+    
+    print(f"✅ Configuration loaded!")
+    print(f"   - Classes: {CLASSES}")
+    print(f"   - Image size: {IMG_SIZE}x{IMG_SIZE}")
+except Exception as e:
+    print(f"❌ Error loading config: {e}")
+    # Fallback defaults
+    IMG_SIZE = 224
+    MEAN = [0.485, 0.456, 0.406]
+    STD = [0.229, 0.224, 0.225]
+    CLASSES = ["leukemia", "normal"]
+    print(f"⚠️ Using default values")
+
+# Load model
+print("🔄 Loading PyTorch model...")
+model = None
+try:
     # Create model architecture (ResNet18)
     model = models.resnet18(weights=models.ResNet18_Weights.IMAGENET1K_V1)
     
@@ -65,17 +87,13 @@ try:
     model = model.float()
     model.eval()
     
-    IMG_SIZE = config["img_size"]
-    MEAN = config["mean"]
-    STD = config["std"]
-    CLASSES = config["classes"]
-    
     print(f"✅ Model loaded successfully!")
-    print(f"   - Classes: {CLASSES}")
-    print(f"   - Image size: {IMG_SIZE}x{IMG_SIZE}")
     
 except Exception as e:
     print(f"❌ Error loading model: {e}")
+    import traceback
+    traceback.print_exc()
+    model = None
 
 # ==================== UTILITIES ====================
 
@@ -345,6 +363,14 @@ async def generate_gradcam_endpoint(file: UploadFile = File(...)):
     Call this AFTER analyze to get heatmap + overlay
     """
     try:
+        # Check if model is loaded
+        if model is None:
+            print("❌ Model not loaded - cannot generate Grad CAM")
+            return {
+                "error": "Model not available. Please check Lambda logs for model loading errors.",
+                "details": "The PyTorch model failed to load during Lambda initialization"
+            }
+        
         print(f"🎯 Generating Grad CAM for: {file.filename}")
         
         # Read uploaded image
