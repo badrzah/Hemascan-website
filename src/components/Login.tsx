@@ -1,36 +1,93 @@
 import { useState } from 'react';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Alert, AlertDescription } from './ui/alert';
-import { Shield, Lock, User } from 'lucide-react';
+import { Shield, User } from 'lucide-react';
+import { GoogleLogin } from '@react-oauth/google';
 
 interface LoginProps {
-  onLogin: (username: string, password: string) => boolean;
+  onLogin: (token: string, userInfo: any) => void;
 }
 
 export default function Login({ onLogin }: LoginProps) {
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (username && password) {
-      setIsLoading(true);
-      setError('');
+  const handleGoogleSuccess = async (response: any) => {
+    setIsLoading(true);
+    setError('');
+    
+    try {
+      // GoogleLogin returns credential (JWT), not access_token
+      // We need to decode it or use useGoogleLogin hook instead
+      // For now, let's decode the JWT to get user info
       
-      // Simulate authentication delay
-      setTimeout(() => {
-        const success = onLogin(username, password);
-        setIsLoading(false);
-        if (!success) {
-          setError('Invalid credentials. Please try again.');
-        }
-      }, 1500);
+      if (!response.credential) {
+        throw new Error('No credential received from Google. Please try again.');
+      }
+
+      // Decode JWT to get user info (simple base64 decode)
+      const base64Url = response.credential.split('.')[1];
+      const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+      const jsonPayload = decodeURIComponent(
+        atob(base64)
+          .split('')
+          .map((c) => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+          .join('')
+      );
+      
+      const userInfo = JSON.parse(jsonPayload);
+      
+      // Check if user info is valid
+      if (!userInfo.email) {
+        throw new Error('Unable to retrieve user email. Please make sure you are added as a test user.');
+      }
+      
+      // Send credential to backend for verification
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://13.49.57.101:8000';
+      const verifyResponse = await fetch(`${apiUrl}/api/auth/google`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          credential: response.credential,
+          user_info: userInfo
+        }),
+      });
+
+      if (!verifyResponse.ok) {
+        const errorText = await verifyResponse.text();
+        throw new Error(`Authentication failed: ${errorText}`);
+      }
+
+      const authData = await verifyResponse.json();
+      
+      // Call parent's onLogin with credential and user info
+      onLogin(response.credential, {
+        ...userInfo,
+        ...authData.user
+      });
+      
+      setIsLoading(false);
+    } catch (err: any) {
+      setIsLoading(false);
+      let errorMessage = err.message || 'Authentication failed. Please try again.';
+      
+      // Provide helpful error messages
+      if (errorMessage.includes('test user')) {
+        errorMessage = 'Please add your email as a test user in Google Cloud Console → OAuth consent screen → Test users';
+      } else if (errorMessage.includes('Failed to fetch')) {
+        errorMessage = 'Unable to connect to Google. Please check your internet connection and try again.';
+      }
+      
+      setError(errorMessage);
+      console.error('Google OAuth error:', err);
     }
+  };
+
+  const handleGoogleError = () => {
+    setError('Google authentication failed. Please try again.');
   };
 
   return (
@@ -70,57 +127,33 @@ export default function Login({ onLogin }: LoginProps) {
                 </Alert>
               )}
 
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div className="space-y-2">
-                  <Label htmlFor="username" className="text-slate-700">
-                    Username
-                  </Label>
-                  <Input
-                    id="username"
-                    type="text"
-                    placeholder="username"
-                    value={username}
-                    onChange={(e) => setUsername(e.target.value)}
-                    className="bg-white border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-                    required
-                    disabled={isLoading}
-                  />
+              <div className="space-y-4">
+                <div className="text-center">
+                  <p className="text-sm text-slate-600 mb-4">
+                    Sign in with your Google account to access HemaScan
+                  </p>
                 </div>
 
-                <div className="space-y-2">
-                  <Label htmlFor="password" className="text-slate-700">
-                    Password
-                  </Label>
-                  <Input
-                    id="password"
-                    type="password"
-                    placeholder="password"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    className="bg-white border-slate-300 focus:border-blue-500 focus:ring-blue-500"
-                    required
-                    disabled={isLoading}
-                  />
-                </div>
+                <GoogleLogin
+                  onSuccess={handleGoogleSuccess}
+                  onError={handleGoogleError}
+                  useOneTap={false}
+                  theme="outline"
+                  size="large"
+                  text="signin_with"
+                  shape="rectangular"
+                  logo_alignment="left"
+                  width="100%"
+                  scope="openid email profile"
+                />
 
-                <Button 
-                  type="submit" 
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3"
-                  disabled={!username || !password || isLoading}
-                >
-                  {isLoading ? (
-                    <div className="flex items-center space-x-2">
-                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
-                      <span>Authenticating...</span>
-                    </div>
-                  ) : (
-                    <div className="flex items-center justify-center space-x-2">
-                      <Lock className="w-4 h-4" />
-                      <span>Secure Login</span>
-                    </div>
-                  )}
-                </Button>
-              </form>
+                {isLoading && (
+                  <div className="flex items-center justify-center space-x-2 text-sm text-slate-600">
+                    <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+                    <span>Authenticating...</span>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </div>

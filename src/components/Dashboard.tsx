@@ -3,6 +3,7 @@ import { Button } from './ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card';
 import { Textarea } from './ui/textarea';
 import { Alert, AlertDescription } from './ui/alert';
+import { toast } from 'sonner';
 import { 
   Shield, 
   LogOut, 
@@ -15,11 +16,19 @@ import {
   FileImage,
   Bot,
   User,
-  RotateCcw
+  RotateCcw,
+  CheckCircle2,
+  FileText
 } from 'lucide-react';
 
 interface DashboardProps {
   onLogout: () => void;
+  userInfo?: {
+    email?: string;
+    name?: string;
+    picture?: string;
+    role?: string;
+  };
 }
 
 // ===== TYPE DEFINITIONS FOR BACKEND INTEGRATION =====
@@ -27,12 +36,10 @@ interface AnalysisResult {
   diagnosis: string;
   confidence: number;
   timestamp: string;
-  heatmapImageUrl?: string;
   overlayImageUrl?: string;
 }
 
 interface GradCAMResult {
-  heatmapImageUrl: string;
   overlayImageUrl: string;
   timestamp: string;
 }
@@ -51,7 +58,7 @@ interface VitalSigns {
   status: 'normal' | 'warning' | 'critical' | 'no_signal';
 }
 
-export default function Dashboard({ onLogout }: DashboardProps) {
+export default function Dashboard({ onLogout, userInfo }: DashboardProps) {
   // ===== STATE MANAGEMENT =====
   // Image upload state
   const [uploadedImage, setUploadedImage] = useState<string | null>(null);
@@ -123,22 +130,20 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     const fetchVitalSigns = async () => {
       try {
         // Fetch real data from your AWS API Gateway
-        const response = await fetch('https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals', {
+        const vitalsUrl = import.meta.env.VITE_VITALS_API_URL || 'https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals';
+        const response = await fetch(vitalsUrl, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
           },
         });
-
         if (response.ok) {
           const data = await response.json();
           console.log('AWS API Response:', data); // Debug log
-          
           // Compute UI status: derive from bpm/spo2 unless truly no signal
           const uiStatus = data.status === 'disconnected'
             ? 'no_signal'
             : determineVitalSignsStatus(data.bpm, data.spo2, true);
-          
           // Update vital signs with real data from ESP32
           setVitalSigns({
             heartRate: Math.round(data.bpm || 0),
@@ -146,7 +151,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
             timestamp: new Date().toISOString(),
             status: uiStatus
           });
-
           // AUTO-STOP: If status is no signal, stop polling
           if (data.status === 'disconnected') {
             console.log('No signal detected - stopping polling to save API calls');
@@ -175,11 +179,11 @@ export default function Dashboard({ onLogout }: DashboardProps) {
         }));
       }
     };
-
     // Smart check function - checks if sensor is active and restarts polling
     const checkForSensorActivity = async () => {
       try {
-        const response = await fetch('https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals', {
+        const vitalsUrl = import.meta.env.VITE_VITALS_API_URL || 'https://wbqi1yjvy2.execute-api.eu-north-1.amazonaws.com/prod/vitals';
+        const response = await fetch(vitalsUrl, {
           method: 'GET',
           headers: {
             'Content-Type': 'application/json',
@@ -319,47 +323,6 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setIsDragOver(false);
   };
 
-  // ===== ANALYSIS FUNCTIONS =====
-  /**
-   * BACKEND INTEGRATION POINT 1: Image Analysis
-   * 
-   * Replace the mock implementation with actual API call:
-   * 
-   * const handleAnalyze = async () => {
-   *   if (!imageFile) {
-   *     alert('Please upload an image first');
-   *     return;
-   *   }
-   * 
-   *   setIsAnalyzing(true);
-   *   
-   *   try {
-   *     const formData = new FormData();
-   *     formData.append('image', imageFile);
-   *     
-   *     const response = await fetch('/api/analyze', {
-   *       method: 'POST',
-   *       body: formData,
-   *       headers: {
-   *         'Authorization': `Bearer ${authToken}` // if using auth tokens
-   *       }
-   *     });
-   * 
-   *     if (!response.ok) {
-   *       throw new Error('Analysis failed');
-   *     }
-   * 
-   *     const result: AnalysisResult = await response.json();
-   *     setAnalysisResult(result);
-   *     setIsAnalyzing(false);
-   *     
-   *   } catch (error) {
-   *     console.error('Analysis failed:', error);
-   *     setIsAnalyzing(false);
-   *     alert('Analysis failed. Please try again.');
-   *   }
-   * };
-   */
   const handleAnalyze = async () => {
     if (!imageFile) {
       alert('Please upload an image first');
@@ -367,76 +330,118 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     }
 
     setIsAnalyzing(true);
+    const startTime = Date.now();
+    console.log('[INFO] Starting analysis...', { fileName: imageFile.name, fileSize: imageFile.size });
     
     try {
       const formData = new FormData();
-      formData.append('file', imageFile);  // Must match backend parameter name
+      formData.append('file', imageFile);
       
-      // Call REAL backend at localhost:8000
-      const response = await fetch('http://localhost:8000/api/analyze', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Authorization': 'Bearer mock_token'
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://13.49.57.101:8000';
+      console.log('[INFO] API URL:', apiUrl);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+          console.error('[TIMEOUT] Request took longer than 60 seconds', { elapsedSeconds: elapsed });
+        controller.abort();
+      }, 60000); // 60 second timeout (reduced from 120)
+      
+      console.log('[INFO] Sending request to backend...');
+      const fetchStartTime = Date.now();
+      
+      let response: Response;
+      try {
+        response = await fetch(`${apiUrl}/api/analyze`, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+          headers: {
+            'Authorization': 'Bearer mock_token'
+          }
+        });
+        const fetchTime = Math.round((Date.now() - fetchStartTime) / 1000);
+        console.log(`[SUCCESS] Received response in ${fetchTime}s`, { status: response.status, statusText: response.statusText, ok: response.ok });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        
+        if (fetchError.name === 'AbortError') {
+          console.error('[TIMEOUT] FETCH ABORTED: Request was cancelled (timeout)', { elapsedSeconds: elapsed });
+          throw new Error(`[TIMEOUT] Request timed out after ${elapsed} seconds. The analysis is taking too long. This could mean:\n\n1. SageMaker endpoint is slow or cold starting\n2. Backend is not responding\n3. Network issues\n\nPlease try again.`);
+        } else if (fetchError.message?.includes('Failed to fetch')) {
+          console.error('[NETWORK ERROR] Cannot reach backend', { error: fetchError.message });
+          throw new Error(`[NETWORK ERROR] Cannot connect to backend at ${apiUrl}\n\nPlease check:\n1. Backend is running\n2. Network connection\n3. CORS settings`);
+        } else {
+          console.error('[ERROR] FETCH ERROR:', fetchError);
+          throw new Error(`[ERROR] Request failed: ${fetchError.message || 'Unknown error'}`);
         }
-      });
+      }
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error('Analysis failed');
+        let errorMessage = `Server returned ${response.status} ${response.statusText}`;
+        let errorDetails: any = null;
+        
+        try {
+          const errorText = await response.text();
+          console.error('[ERROR] Error response body:', errorText);
+          
+          try {
+            errorDetails = JSON.parse(errorText);
+            console.error('[ERROR] Parsed error:', errorDetails);
+            errorMessage = errorDetails.detail || errorDetails.error || errorDetails.message || errorMessage;
+          } catch (e) {
+            errorMessage = errorText || errorMessage;
+          }
+        } catch (e) {
+          console.error('[ERROR] Could not read error response:', e);
+        }
+        
+        if (response.status === 500) {
+          throw new Error(`[ERROR] Server Error (500): ${errorMessage}\n\nThis usually means:\n1. SageMaker endpoint crashed\n2. Backend code error\n3. Model loading failed\n\nCheck CloudWatch logs for details.`);
+        } else if (response.status === 503) {
+          throw new Error(`[SERVICE UNAVAILABLE] Service Unavailable (503): ${errorMessage}\n\nSageMaker endpoint might be:\n1. Still starting up\n2. Overloaded\n3. Unavailable\n\nWait a moment and try again.`);
+        } else if (response.status === 504) {
+          throw new Error(`[TIMEOUT] Gateway Timeout (504): ${errorMessage}\n\nBackend took too long to respond.\n\nThis could mean:\n1. SageMaker is processing (first request is slow)\n2. Model is loading\n3. Network issues\n\nTry again - subsequent requests should be faster.`);
+        } else {
+          throw new Error(`[ERROR] HTTP ${response.status}: ${errorMessage}`);
+        }
       }
 
+      console.log('[INFO] Parsing response JSON...');
       const result: AnalysisResult = await response.json();
+      const totalTime = Math.round((Date.now() - startTime) / 1000);
+      console.log(`[SUCCESS] Analysis complete in ${totalTime}s`, result);
+      
       setAnalysisResult(result);
       setIsAnalyzing(false);
       
     } catch (error: any) {
-      console.error('Analysis failed:', error);
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      console.error('[ERROR] ANALYSIS FAILED:', {
+        error,
+        errorName: error?.name,
+        errorMessage: error?.message,
+        elapsedSeconds: elapsed,
+        stack: error?.stack
+      });
+      
       setIsAnalyzing(false);
-      alert('Analysis failed: ' + error.message);
+      
+      let errorMessage = 'Analysis failed';
+      if (error.name === 'AbortError' || error.message?.includes('timed out')) {
+        errorMessage = error.message || `[TIMEOUT] Request timed out after ${elapsed} seconds. The analysis is taking too long. Please try again.`;
+      } else if (error.message) {
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
+        errorMessage = error.toString();
+      }
+      
+      alert(`[ERROR] Analysis Failed\n\n${errorMessage}\n\nElapsed time: ${elapsed}s\n\nCheck browser console (F12) for more details.`);
     }
   };
-
-  /**
-   * BACKEND INTEGRATION POINT 2: Grad CAM Generation
-   * 
-   * Replace the mock implementation with actual API call:
-   * 
-   * const handleGradCAM = async () => {
-   *   if (!imageFile || !analysisResult) {
-   *     alert('Please analyze an image first before generating Grad CAM visualization');
-   *     return;
-   *   }
-   * 
-   *   setIsGeneratingGradCAM(true);
-   *   
-   *   try {
-   *     const formData = new FormData();
-   *     formData.append('image', imageFile);
-   *     formData.append('analysisId', analysisResult.id); // if you have analysis ID
-   *     
-   *     const response = await fetch('/api/generate-gradcam', {
-   *       method: 'POST',
-   *       body: formData,
-   *       headers: {
-   *         'Authorization': `Bearer ${authToken}` // if using auth tokens
-   *       }
-   *     });
-   * 
-   *     if (!response.ok) {
-   *       throw new Error('Grad CAM generation failed');
-   *     }
-   * 
-   *     const gradcamData: GradCAMResult = await response.json();
-   *     setGradCAMResult(gradcamData);
-   *     setIsGeneratingGradCAM(false);
-   *     
-   *   } catch (error) {
-   *     console.error('Grad CAM generation failed:', error);
-   *     setIsGeneratingGradCAM(false);
-   *     alert('Grad CAM visualization failed. Please try again.');
-   *   }
-   * };
-   */
   const handleGradCAM = async () => {
     if (!imageFile || !analysisResult) {
       alert('Please analyze an image first before generating Grad CAM visualization');
@@ -444,160 +449,374 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     }
 
     setIsGeneratingGradCAM(true);
+    const startTime = Date.now();
+    console.log('[INFO] Starting Grad CAM generation...', { fileName: imageFile.name });
     
     try {
       const formData = new FormData();
       formData.append('file', imageFile);
       
-      // Call Grad CAM endpoint
-      const response = await fetch('http://localhost:8000/api/generate-gradcam', {
-        method: 'POST',
-        body: formData,
-        headers: {
-          'Authorization': 'Bearer mock_token'
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://13.49.57.101:8000';
+      console.log('[INFO] Calling Grad CAM endpoint:', `${apiUrl}/api/generate-gradcam`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => {
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        console.error('[TIMEOUT] Grad CAM request took longer than 60 seconds', { elapsedSeconds: elapsed });
+        controller.abort();
+      }, 60000); // 60 second timeout
+      
+      const fetchStartTime = Date.now();
+      let response: Response;
+      
+      try {
+        response = await fetch(`${apiUrl}/api/generate-gradcam`, {
+          method: 'POST',
+          body: formData,
+          signal: controller.signal,
+          headers: {
+            'Authorization': 'Bearer mock_token'
+          }
+        });
+        const fetchTime = Math.round((Date.now() - fetchStartTime) / 1000);
+        console.log(`[SUCCESS] Received Grad CAM response in ${fetchTime}s`, { status: response.status, ok: response.ok });
+      } catch (fetchError: any) {
+        clearTimeout(timeoutId);
+        const elapsed = Math.round((Date.now() - startTime) / 1000);
+        
+        if (fetchError.name === 'AbortError') {
+          console.error('[TIMEOUT] FETCH ABORTED: Grad CAM request timed out', { elapsedSeconds: elapsed });
+          throw new Error(`[TIMEOUT] Grad CAM request timed out after ${elapsed} seconds. Please try again.`);
+        } else if (fetchError.message?.includes('Failed to fetch')) {
+          console.error('[NETWORK ERROR] Cannot reach backend for Grad CAM', { error: fetchError.message });
+          throw new Error(`[NETWORK ERROR] Cannot connect to backend at ${apiUrl}`);
+        } else {
+          console.error('[ERROR] FETCH ERROR:', fetchError);
+          throw new Error(`[ERROR] Request failed: ${fetchError.message || 'Unknown error'}`);
         }
-      });
+      }
+      
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
-        throw new Error('Grad CAM generation failed');
+        let errorMessage = `Server returned ${response.status} ${response.statusText}`;
+        
+        try {
+          const errorText = await response.text();
+          console.error('[ERROR] Grad CAM error response:', errorText);
+          
+          try {
+            const errorDetails = JSON.parse(errorText);
+            errorMessage = errorDetails.detail || errorDetails.error || errorDetails.message || errorMessage;
+          } catch (e) {
+            errorMessage = errorText || errorMessage;
+          }
+        } catch (e) {
+          console.error('[ERROR] Could not read error response:', e);
+        }
+        
+        if (response.status === 500) {
+          throw new Error(`[ERROR] Server Error (500): ${errorMessage}\n\nGrad CAM generation failed. Check if pytorch_grad_cam is available.`);
+        } else {
+          throw new Error(`[ERROR] HTTP ${response.status}: ${errorMessage}`);
+        }
       }
 
+      console.log('[INFO] Parsing Grad CAM response...');
       const gradcamData = await response.json();
+      const totalTime = Math.round((Date.now() - startTime) / 1000);
+      console.log(`[SUCCESS] Grad CAM complete in ${totalTime}s`, gradcamData);
       
-      // Update analysis result with Grad CAM images
+      // Check if we have the overlay image URL
+      const overlayUrl = gradcamData.overlayImageUrl;
+      if (!overlayUrl || overlayUrl.trim() === '') {
+        console.error('[ERROR] Empty overlayImageUrl in response', gradcamData);
+        throw new Error('Grad CAM generated but no image URL returned. Response may be missing overlayImageUrl.');
+      }
+      
+      console.log('[INFO] Setting Grad CAM result with overlay URL:', overlayUrl.substring(0, 50) + '...');
+      
+      // Set Grad CAM result
+      const gradcamResult = {
+        overlayImageUrl: overlayUrl,
+        timestamp: gradcamData.timestamp || new Date().toISOString()
+      };
+      setGradCAMResult(gradcamResult);
+      console.log('[SUCCESS] Grad CAM result state updated');
+      
+      // Also update analysis result with Grad CAM images
       setAnalysisResult({
         ...analysisResult,
-        heatmapImageUrl: gradcamData.heatmapImageUrl,
-        overlayImageUrl: gradcamData.overlayImageUrl
+        overlayImageUrl: overlayUrl
       });
+      console.log('[SUCCESS] Analysis result updated with Grad CAM overlay');
       
       setIsGeneratingGradCAM(false);
       
     } catch (error: any) {
-      console.error('Grad CAM generation failed:', error);
+      const elapsed = Math.round((Date.now() - startTime) / 1000);
+      console.error('[ERROR] GRAD CAM FAILED:', {
+        error,
+        errorName: error?.name,
+        errorMessage: error?.message,
+        elapsedSeconds: elapsed,
+        stack: error?.stack
+      });
+      
       setIsGeneratingGradCAM(false);
-      alert('Grad CAM visualization failed: ' + error.message);
+      
+      let errorMessage = 'Grad CAM visualization failed';
+      if (error.message) {
+        errorMessage = error.message;
+      } else if (error instanceof Error) {
+        errorMessage = error.toString();
+      }
+      
+      alert(`[ERROR] Grad CAM Failed\n\n${errorMessage}\n\nElapsed time: ${elapsed}s\n\nCheck browser console (F12) for details.`);
     }
   };
-
-  /**
-   * BACKEND INTEGRATION POINT 3: Save Results
-   * 
-   * Replace the mock implementation with actual API call:
-   * 
-   * const handleSaveResult = async () => {
-   *   if (!analysisResult) {
-   *     alert('No analysis result to save');
-   *     return;
-   *   }
-   * 
-   *   try {
-   *     const response = await fetch('/api/save-result', {
-   *       method: 'POST',
-   *       headers: {
-   *         'Content-Type': 'application/json',
-   *         'Authorization': `Bearer ${authToken}` // if using auth tokens
-   *       },
-   *       body: JSON.stringify({
-   *         analysisResult,
-   *         gradCAMResult, // if available
-   *         patientId: 'current-patient-id', // if applicable
-   *         timestamp: new Date().toISOString()
-   *       })
-   *     });
-   * 
-   *     if (!response.ok) {
-   *       throw new Error('Save failed');
-   *     }
-   * 
-   *     alert('Analysis result saved successfully!');
-   *     
-   *   } catch (error) {
-   *     console.error('Save failed:', error);
-   *     alert('Failed to save result. Please try again.');
-   *   }
-   * };
-   */
   const handleSaveResult = async () => {
     if (!analysisResult) {
-      alert('No analysis result to save');
       return;
     }
 
+    // Show loading indicator (find button by checking text content)
+    let buttonElement: HTMLButtonElement | null = null;
+    let buttonSpan: HTMLSpanElement | null = null;
+    const allButtons = document.querySelectorAll('button');
+    for (const btn of allButtons) {
+      const btnText = btn.textContent?.trim();
+      if (btnText === 'Save Result' || btnText?.includes('Save Result')) {
+        buttonElement = btn as HTMLButtonElement;
+        // Find the span element inside the button to preserve icon
+        buttonSpan = btn.querySelector('span:last-child') as HTMLSpanElement;
+        buttonElement.disabled = true;
+        // Only update the text, keep the icon
+        if (buttonSpan && buttonSpan.textContent) {
+          buttonSpan.textContent = 'Generating PDF...';
+        }
+        break;
+      }
+    }
+
     try {
-      // Mock save operation for demonstration
-      alert('Analysis result saved successfully!');
+      
+      // Dynamic import of jsPDF to avoid issues
+      console.log('[INFO] Save Result clicked - Generating PDF');
+      console.log('   ImageFile:', imageFile);
+      console.log('   AnalysisResult:', analysisResult);
+      
+      // Import jsPDF
+      const jsPDFModule = await import('jspdf');
+      const jsPDF = jsPDFModule.jsPDF || jsPDFModule.default;
+      if (!jsPDF) {
+        throw new Error('jsPDF library not loaded correctly');}
+      console.log('   jsPDF loaded successfully');
+      // Get image file name (or use default if not available)
+      const imageFileName = imageFile?.name || 'unknown_image';
+      const diagnosis = analysisResult.diagnosis || 'Unknown';
+      const confidence = analysisResult.confidence || 0;
+      const currentDate = new Date();
+      const dateStr = currentDate.toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'long', 
+        day: 'numeric' });
+      const timeStr = currentDate.toLocaleTimeString('en-US', { 
+        hour: '2-digit', 
+        minute: '2-digit' });
+      // Create PDF document (A4 size, portrait)
+      const pdf = new jsPDF({
+        orientation: 'portrait',
+        unit: 'mm',
+        format: 'a4'});
+      // Set up colors
+      const primaryColor = [0, 102, 204]; // Blue
+      const accentColor = [255, 102, 0]; // Orange
+      const textColor = [51, 51, 51]; // Dark gray
+      const lightGray = [245, 245, 245];
+      let yPos = 20; // Starting Y position
+      // Header Section
+      pdf.setFillColor(...primaryColor);
+      pdf.rect(0, 0, 210, 30, 'F');
+      
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(24);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('HemaScan', 15, 18);
+      
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      pdf.text('Leukemia Detection and Diagnosis System', 15, 25);
+      
+      yPos = 40;
+      
+      // Title
+      pdf.setTextColor(...textColor);
+      pdf.setFontSize(18);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Analysis Report', 15, yPos);
+      yPos += 15;
+      // Report Information Box
+      pdf.setFillColor(...lightGray);
+      pdf.roundedRect(15, yPos - 5, 180, 40, 3, 3, 'F');
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setTextColor(...textColor);
+      pdf.text(`Report Date: ${dateStr}`, 20, yPos + 5);
+      pdf.text(`Report Time: ${timeStr}`, 20, yPos + 12);
+      pdf.text(`Image File: ${imageFileName}`, 20, yPos + 19);
+      pdf.text(`Report ID: ${currentDate.getTime()}`, 20, yPos + 26);
+      yPos += 50;
+      // Diagnosis Section
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.setTextColor(...textColor);
+      pdf.text('Diagnosis', 15, yPos);
+      
+      yPos += 8;
+      
+      pdf.setFillColor(...accentColor);
+      pdf.roundedRect(15, yPos - 5, 180, 15, 3, 3, 'F');
+      
+      pdf.setTextColor(255, 255, 255);
+      pdf.setFontSize(16);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(diagnosis, 20, yPos + 5);
+      
+      yPos += 25;
+      
+      // Confidence Level Section
+      pdf.setTextColor(...textColor);
+      pdf.setFontSize(14);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('Confidence Level', 15, yPos);
+      
+      yPos += 10;
+      
+      // Confidence bar background
+      pdf.setFillColor(...lightGray);
+      pdf.roundedRect(15, yPos - 5, 180, 20, 3, 3, 'F');
+      
+      // Confidence bar fill (based on percentage)
+      const barWidth = (confidence / 100) * 180;
+      const barColor = confidence >= 80 ? [0, 153, 0] : confidence >= 60 ? [255, 153, 0] : [204, 0, 0];
+      pdf.setFillColor(...barColor);
+      pdf.roundedRect(15, yPos - 5, barWidth, 20, 3, 3, 'F');
+      
+      // Confidence percentage text
+      pdf.setTextColor(...textColor);
+      pdf.setFontSize(18);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text(`${confidence.toFixed(1)}%`, 20, yPos + 8);
+      
+      yPos += 35;
+      
+      // Important Notice Section (HIPAA Disclaimer)
+      pdf.setFillColor(255, 255, 200); // Light yellow
+      pdf.roundedRect(15, yPos - 5, 180, 50, 3, 3, 'F');
+      
+      pdf.setTextColor(...textColor);
+      pdf.setFontSize(10);
+      pdf.setFont('helvetica', 'bold');
+      pdf.text('IMPORTANT MEDICAL DISCLAIMER', 20, yPos);
+      
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(9);
+      const disclaimerText = [
+        'This analysis report is generated by an AI-powered diagnostic system for',
+        'educational and research purposes only. This report does NOT constitute',
+        'a medical diagnosis, and should NOT be used as a substitute for',
+        'professional medical advice, diagnosis, or treatment.',
+        '',
+        'Always consult with a qualified healthcare provider for proper medical',
+        'evaluation and treatment decisions. The confidence levels and diagnoses',
+        'presented are estimates and require clinical validation.'
+      ];
+      
+      disclaimerText.forEach((line, index) => {
+        pdf.text(line, 20, yPos + 8 + (index * 5));
+      });
+      
+      yPos += 60;
+      
+      // Footer
+      pdf.setDrawColor(200, 200, 200);
+      pdf.line(15, yPos, 195, yPos);
+      
+      yPos += 10;
+      
+      pdf.setFontSize(8);
+      pdf.setTextColor(150, 150, 150);
+      pdf.setFont('helvetica', 'italic');
+      pdf.text('This document contains Protected Health Information (PHI) and is subject to HIPAA regulations.', 15, yPos);
+      pdf.text('Handle with appropriate security measures and only share with authorized personnel.', 15, yPos + 5);
+      
+      // Generate filename
+      const baseFileName = imageFileName.replace(/\.[^/.]+$/, '') || 'analysis_result';
+      const fileName = `${baseFileName}_analysis_report.pdf`;
+      
+      // Get PDF as blob first to ensure it's complete
+      const pdfBlob = pdf.output('blob');
+      
+      // Create download link
+      const url = URL.createObjectURL(pdfBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = fileName;
+      link.style.display = 'none';
+      
+      // Append to body, click, then remove
+      document.body.appendChild(link);
+      link.click();
+      
+      // Cleanup after a short delay
+      setTimeout(() => {
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      }, 100);
+      
+      console.log('[SUCCESS] PDF report generated and saved:', fileName);
+      
+      // Re-enable button
+      if (buttonElement) {
+        buttonElement.disabled = false;
+        if (buttonSpan) {
+          buttonSpan.textContent = 'Save Result';
+        } else {
+          buttonElement.textContent = 'Save Result';
+        }
+      }
+      
+      // Show success toast notification
+      toast.success('Analysis Report Saved', {
+        description: `${fileName} has been downloaded successfully.`,
+        icon: <FileText className="w-4 h-4 text-green-600" />,
+        duration: 4000,
+      });
       
     } catch (error) {
-      console.error('Save failed:', error);
-      alert('Failed to save result. Please try again.');
+      console.error('[ERROR] PDF generation failed:', error);
+      console.error('   Error details:', error);
+      console.error('   Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+      
+      // Re-enable button
+      if (buttonElement) {
+        buttonElement.disabled = false;
+        if (buttonSpan) {
+          buttonSpan.textContent = 'Save Result';
+        } else {
+          buttonElement.textContent = 'Save Result';
+        }
+      }
+      
+      // Show error toast notification
+      toast.error('Failed to Save Report', {
+        description: error instanceof Error ? error.message : 'An error occurred while generating the PDF. Please try again.',
+        duration: 5000,
+      });
     }
   };
 
-  /**
-   * BACKEND INTEGRATION POINT 4: AI Chat
-   * 
-   * Replace the mock implementation with actual API call:
-   * 
-   * const handleSendMessage = async () => {
-   *   if (!currentMessage.trim()) return;
-   * 
-   *   const userMessage: ChatMessage = {
-   *     id: Date.now().toString(),
-   *     sender: 'user',
-   *     message: currentMessage,
-   *     timestamp: new Date().toISOString()
-   *   };
-   * 
-   *   setChatMessages(prev => [...prev, userMessage]);
-   *   setCurrentMessage('');
-   *   setIsChatLoading(true);
-   * 
-   *   try {
-   *     const response = await fetch('/api/chat', {
-   *       method: 'POST',
-   *       headers: {
-   *         'Content-Type': 'application/json',
-   *         'Authorization': `Bearer ${authToken}` // if using auth tokens
-   *       },
-   *       body: JSON.stringify({
-   *         message: currentMessage,
-   *         context: {
-   *           analysisResult,
-   *           gradCAMResult,
-   *           conversationHistory: chatMessages
-   *         }
-   *       })
-   *     });
-   * 
-   *     if (!response.ok) {
-   *       throw new Error('Chat request failed');
-   *     }
-   * 
-   *     const aiResponse = await response.json();
-   *     const aiMessage: ChatMessage = {
-   *       id: (Date.now() + 1).toString(),
-   *       sender: 'ai',
-   *       message: aiResponse.message,
-   *       timestamp: new Date().toISOString()
-   *     };
-   *     
-   *     setChatMessages(prev => [...prev, aiMessage]);
-   *     setIsChatLoading(false);
-   * 
-   *   } catch (error) {
-   *     console.error('Chat failed:', error);
-   *     setIsChatLoading(false);
-   *     const errorMessage: ChatMessage = {
-   *       id: (Date.now() + 1).toString(),
-   *       sender: 'ai',
-   *       message: 'Sorry, I encountered an error. Please try again.',
-   *       timestamp: new Date().toISOString()
-   *     };
-   *     setChatMessages(prev => [...prev, errorMessage]);
-   *   }
-   * };
-   */
   const handleSendMessage = async () => {
     if (!currentMessage.trim()) return;
 
@@ -614,8 +833,12 @@ export default function Dashboard({ onLogout }: DashboardProps) {
     setIsChatLoading(true);
 
     try {
-      // Call REAL backend chat API
-      const response = await fetch('http://localhost:8000/api/chat', {
+      // Call backend chat API
+      // Use EC2 backend for chatbot
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://13.49.57.101:8000';
+      const chatApiUrl = `${apiUrl}/api/chat`;
+      
+      const response = await fetch(chatApiUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -629,10 +852,29 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       });
 
       if (!response.ok) {
-        throw new Error('Chat request failed');
+        // Try to get error details from response
+        let errorDetail = `HTTP ${response.status}`;
+        try {
+          const errorData = await response.json();
+          if (errorData.error) {
+            errorDetail = errorData.error;
+          } else if (errorData.message) {
+            errorDetail = errorData.message;
+          }
+        } catch (e) {
+          // Response might not be JSON
+          const text = await response.text();
+          if (text) errorDetail = text.substring(0, 200);
+        }
+        throw new Error(`Chat request failed: ${errorDetail}`);
       }
 
       const data = await response.json();
+      
+      // Check if backend returned an error in the response
+      if (data.error) {
+        throw new Error(data.error);
+      }
       const aiMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'ai',
@@ -644,12 +886,30 @@ export default function Dashboard({ onLogout }: DashboardProps) {
       setIsChatLoading(false);
 
     } catch (error: any) {
-      console.error('Chat failed:', error);
+      console.error('[ERROR] Chat failed:', error);
+      console.error('   Error type:', error?.constructor?.name);
+      console.error('   Error message:', error?.message);
+      console.error('   Error stack:', error?.stack);
+      
       setIsChatLoading(false);
+      
+      // Try to extract more specific error information
+      let errorText = 'Sorry, I encountered an error. Please try again.';
+      
+      if (error?.message) {
+        if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+          errorText = 'Unable to connect to the chat service. Please check your internet connection and try again.';
+        } else if (error.message.includes('Chat request failed')) {
+          errorText = 'The chat service returned an error. Please try again in a moment.';
+        } else {
+          errorText = `Error: ${error.message}`;
+        }
+      }
+      
       const errorMessage: ChatMessage = {
         id: (Date.now() + 1).toString(),
         sender: 'ai',
-        message: 'Sorry, I encountered an error. Please try again.',
+        message: errorText,
         timestamp: new Date().toISOString()
       };
       setChatMessages(prev => [...prev, errorMessage]);
@@ -787,9 +1047,9 @@ export default function Dashboard({ onLogout }: DashboardProps) {
                     <AlertDescription className="text-blue-800">
                       <strong>Grad CAM (Gradient-weighted Class Activation Mapping)</strong> reveals the specific regions of the blood smear that influenced the AI's diagnostic decision.
                       <span className="block mt-2">
-                        <span className="font-medium text-red-600">🔴 Red/Orange regions:</span> High diagnostic importance (potential abnormalities)
+                        <span className="font-medium text-red-600">Red/Orange regions:</span> High diagnostic importance (potential abnormalities)
                         <br />
-                        <span className="font-medium text-blue-600">🔵 Blue/Purple regions:</span> Low diagnostic importance (normal areas)
+                        <span className="font-medium text-blue-600">Blue/Purple regions:</span> Low diagnostic importance (normal areas)
                       </span>
                     </AlertDescription>
                   </Alert>
